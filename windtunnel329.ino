@@ -20,8 +20,10 @@ boolean Motorshomed = false;
 int position = 0;
 int limswitch1 = 14;
 int limswitch2 = 15;
+int lowlim1 = 0;
 int directionpin1 = 16;
 int stepper1 = 17;
+int currentlim = 5;
 int home = 0;
 
 // ===========================
@@ -93,7 +95,6 @@ uint8_t readFT6236TouchLocation(TouchLocation *pLoc, uint8_t num) {
   return retVal;
 }
 
-
 // ===========================
 //   SETUP FUNCTION
 // ===========================
@@ -113,14 +114,21 @@ void setup() {
 // ===========================
 //     MAIN LOOP FUNCTION
 // ===========================
+
+unsigned long lastUpdateTime = 0;  // Track last update time
+const unsigned long updateInterval = 1000;  // 500ms update interval
+
 void loop() {
-  if (!Motorshomed) {
     homeMotor();
-  }
+
   if (!digitalRead(FT6236_INT)) {
     processTouch();
   }
-  updateSensors();
+  // ** Read sensor values and update UI only at intervals **
+  if (millis() - lastUpdateTime >= updateInterval) {
+    lastUpdateTime = millis();  // Update the last time we refreshed data
+    updateSensors();
+  }
 }
 
 // ===========================
@@ -135,6 +143,7 @@ void drawButton(int x, int y, const char *label) {
 
 void drawInterface() { 
   myGLCD.clrScr();
+
   // Labels
   myGLCD.setFont(GroteskBold16x32);
   myGLCD.setColor(255, 255, 255);
@@ -210,13 +219,13 @@ void processTouch() {
       if (windSpeed < 400) { windSpeed++; }
       updateWindSpeedDisplay();
       changeWindSpeed();  // 👈 update PWM based on new value
-      adjustMotorToWindSpeed();
+      //adjustMotorToWindSpeed();
     } 
     else if (touchX > 330 && touchX < 380 && touchY > 500 && touchY < 560) {
       if (windSpeed > 0) { windSpeed--; }
       updateWindSpeedDisplay();
       changeWindSpeed();  // 👈 update PWM based on new value
-      adjustMotorToWindSpeed();
+      //adjustMotorToWindSpeed();
     }
 
     // Temperature Buttons
@@ -236,56 +245,89 @@ void processTouch() {
 // ===========================
 
 void homeMotor() {
-  digitalWrite(directionpin1, HIGH); // HIGH means move forward
-  while (checkLimits() == 0) {
-    moveStepper(1, 1); // Move stepper forward
+  if (Motorshomed == false) {
+  Direction(directionpin1, 1); // HIGH means move forward
+  while (checkLimits(limswitch1, limswitch2) == 0) 
+  {
+    moveStepper(stepper1); // Move stepper forward
+    delay(5);
+    Serial.println("step");
+    checkLimits(limswitch1, limswitch2);
   }
-  digitalWrite(directionpin1, LOW); // LOW means move backward
-  int currentlim = checkLimits();
-  while (checkLimits() == currentlim) {
-    moveStepper(1, 0); // Move stepper backward
+  Direction(directionpin1, 0);
+  currentlim = checkLimits(limswitch1, limswitch2);
+  while(checkLimits(limswitch1, limswitch2) == currentlim) 
+  {
+    moveStepper(stepper1);
+    delay(5);
+    Serial.println("step");
     position++;
   }
-  while (checkLimits() == 0) {
-    moveStepper(1, 0);
+  while(checkLimits(limswitch1, limswitch2) == 0) 
+  {
+    moveStepper(stepper1);
+    delay(5);
+    Serial.println("step");
+    checkLimits(limswitch1, limswitch2);
     position++;
   }
+  lowlim1 = checkLimits(limswitch1, limswitch2);
   home = position / 2;
   Motorshomed = true;
-  digitalWrite(directionpin1, HIGH); // Move forward again to set home position
-  while (position != home) {
-    moveStepper(1, 1);
+  Direction(directionpin1, 1); // Move forward again to set home position
+  while (position != home) 
+  {
+    moveStepper(stepper1);
+    delay(5);
+    Serial.println("step");
     position--;
   }
   Serial.println("Home set");
-}
-
-void moveStepper(int steps, int dir) {
-  digitalWrite(directionpin1, dir);
-  for (int i = 0; i < steps; i++) {
-    digitalWrite(stepper1, HIGH);  // Assuming you're using a simple HIGH/LOW to step the motor
-    delay(1);
-    digitalWrite(stepper1, LOW);
-    delay(1);
   }
 }
+void moveStepper(int steppin) 
+{
+  pinMode(steppin, OUTPUT);
+  digitalWrite(steppin,HIGH); //Trigger one step forward
+  delay(1);
+  digitalWrite(steppin,LOW); //Pull step pin low so it can be triggered again
+  delay(1);
+}
 
-int checkLimits() {
-  pinMode(limswitch1, INPUT); //highlim
-  pinMode(limswitch2, INPUT); //lowlim
-  if (digitalRead(limswitch1) == HIGH) {
+int checkLimits(int highLim, int lowLim) {
+  pinMode(highLim, INPUT); //highlim
+  pinMode(lowLim, INPUT); //lowlim
+
+  if (digitalRead(highLim) == HIGH) {
     Serial.println("Hit high lim");
     return 1;
   }
-  if (digitalRead(limswitch2) == HIGH) {
+  if (digitalRead(lowLim) == HIGH) {
     Serial.println("Hit low lim");
     return 2;
   }
   return 0;
 }
 
+//Direction function of motor 
+//requires dirpin is direction pin, needs to be set as output
+//dir = 0 = foward, dir = 1 backawards
+void Direction(int dirPin, int dir)
+{
+    pinMode(dirPin, OUTPUT);
+    if(dir == 0)
+    {
+      digitalWrite(dirPin, LOW);
+    }
+    if(dir == 1)
+    {
+      digitalWrite(dirPin, HIGH);
+    }
+}
+
+
 /// Function to increase or decrease LFM with motor
-void adjustMotorToWindSpeed() {
+/*void adjustMotorToWindSpeed() {
   int stepsToMove = abs(windSpeed - position);
 
   if (windSpeed > position) {
@@ -295,41 +337,57 @@ void adjustMotorToWindSpeed() {
       moveStepper(stepsToMove, 0); // Move backward
       position -= stepsToMove;
   }
-}
-
+} 
+*/
 // ===========================
 //    SENSOR READING
 // ===========================
 void updateSensors() {
   int TMP1_Therm_ADunits = analogRead(analogPinTMP1);  
   float TMP1_Volts = TMP1_Therm_ADunits * 0.0048828125;
+
   int RV1_Wind_ADunits = analogRead(analogPinRV1);
   float RV1_Wind_Volts = RV1_Wind_ADunits * 0.0048828125;
+
   float zeroWind_ADunits = -0.0006 * (TMP1_Therm_ADunits * TMP1_Therm_ADunits) + 1.0727 * TMP1_Therm_ADunits + 47.172;
   float zeroWind_volts = zeroWind_ADunits * 0.0048828125;
+
+  //Convert Temp to °C with improved accuracy
   currTemperature = (0.00391 * (TMP1_Therm_ADunits * TMP1_Therm_ADunits)) - (14.862 * TMP1_Therm_ADunits) + 8575.4;
-  currTemperature /= 100;
-  currWindSpeed = (RV1_Wind_Volts < zeroWind_volts) ? 0 : pow(((RV1_Wind_Volts - zeroWind_volts) / 0.2300), 2.7265) * 88;
-  updateCurrentTemperatureDisplay();
+  currTemperature /= 100; // Convert from times 100 format
+
+  // Calculate Wind Speed in LFM (Linear Feet per Minute)
+  if (RV1_Wind_Volts < zeroWind_volts) {
+    currWindSpeed = 0;  
+  } else {
+    currWindSpeed = pow(((RV1_Wind_Volts - zeroWind_volts) / 0.2300), 2.7265) * 88; // Convert mph to LFM
+  }
+
   updateCurrentWindSpeedDisplay();
+  updateCurrentTemperatureDisplay();
 }
 
 // ===========================
 //    PWM CONTROL FOR FAN
 // ===========================
 void setupPWM() {
-  TCCR1A = (1 << COM1B1) | (1 << WGM11);  // Adjusted to work with 16-bit timers (Timer 1)
-  TCCR1B = (1 << WGM13) | (1 << WGM12) | (1 << CS10);  // Adjusted to work with 16-bit timers (Timer 1)
-  ICR1 = 3199;  // Define the frequency of the PWM signal
+  TCCR5A = 0;
+  TCCR5B = 0;
+  TCNT5 = 0;
+
+  TCCR5A = (1 << COM5C1) | (1 << WGM51);  // Clear OC5C on compare match, Fast PWM
+  TCCR5B = (1 << WGM53) | (1 << WGM52) | (1 << CS50); // WGM=14, no prescaler
+
+  ICR5 = 3199;   // Sets PWM frequency to 5kHz
 }
 
 void changeWindSpeed() {
   // Map the windSpeed value to a PWM duty cycle
-  dutyCycle = map(windSpeed, 0, 400, 0, 100);  // Maps windSpeed from 0 to 400 to a duty cycle of 0% to 100%
-  setDutyCycle(dutyCycle);  // Update PWM based on the mapped duty cycle
+  float duty = map(windSpeed, 0, 400, 0, 100);  // Maps windSpeed from 0 to 400 to a duty cycle of 0% to 100%
+  setDutyCycle(duty);  // Update PWM based on the mapped duty cycle
 }
 
-void setDutyCycle(float duty) {
-  duty = constrain(duty, 0, 100);
-  OCR1B = (uint16_t)((duty / 100.0) * ICR1);  // Set PWM duty cycle
+void setDutyCycle(float percent) {
+  percent = constrain(percent, 0, 100);
+  OCR5C = (uint16_t)((percent / 100.0) * ICR5);  // Set PWM duty cycle
 }
